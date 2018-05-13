@@ -1,0 +1,368 @@
+---
+
+title: "analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r function}
+
+# 生成日期主键
+gen_date <- function(from = as.Date("2015/01/01",format = "%Y/%m/%d"), by = "day", 
+                     to = as.Date("2017/12/08",format = "%Y/%m/%d"), weekend = FALSE)
+{
+  seqdate <- seq.Date(from = from, by = by, 
+                      to = to)
+  if (!weekend){
+    seqdate <- seqdate[!(weekdays(seqdate) %in% c('星期六','星期日'))]
+  }
+  
+  seqdate <- format(seqdate, format = "%Y%m%d")
+  
+  seqdatef <- data.frame(date = seqdate, volume=rep(NA,length(seqdate)),is_split=rep(0,length(seqdate)),stringsAsFactors=FALSE)
+  
+  return(seqdatef)
+}
+
+
+
+# 合并要画图的数据，标记分割点
+merge_plot_data <- function(temp,markup)
+{
+  start_date = min(temp$time)
+  seqdatef <- gen_date(from =as.Date(as.character(start_date), format = "%Y%m%d"))
+  for (i in 1:length(temp$time))
+  {
+    seqdatef[seqdatef$date==temp$time[i],'volume'] = temp$raw[i]
+    if (i %in% markup)
+    {
+      seqdatef[seqdatef$date==temp$time[i],'is_split'] = 1
+    }
+  }
+  j=1
+  for (i in 2:nrow(seqdatef))
+  {
+    if (seqdatef$is_split[i]==1){
+      if (i-j<=20 & j!=1){seqdatef$is_split[j]=2}
+      if (i-j<=5 & j!=1){seqdatef$is_split[j]=3}
+      j=i
+    }
+  }
+  return(seqdatef)
+}
+
+
+# 画图
+draw_pic <- function(temp,best_k,method)
+{
+  name = str_split(str_split(temp$name,'_')[[1]][1],'v')[[1]][1]
+  
+  year = str_split(temp$name,'_')[[1]][2]
+  if (year == 'all'){
+    year = '2015-2017'
+  }
+  if (year == '2016')
+  {
+    year = '2016-2017'
+  }
+  name = str_c(name,' ',year )
+  print(name)
+  lost = temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  for (i in temp$res$result)
+  {
+    if (i$k == best_k)
+    {
+      best_res = i$result
+      break
+    }
+  }
+  s = strsplit(best_res,'\\|\\|')[[1]]
+  
+  markup=0
+  for (i in s)
+  {
+    markup = c(markup, as.integer(strsplit(i,' ')[[1]][1]))
+  }
+  markup = tail(markup,-2)
+  seqdatef <- merge_plot_data(temp,markup)
+  markup_1 = which(seqdatef$is_split==1)
+  markup_2 = which(seqdatef$is_split==2)
+  markup_3 = which(seqdatef$is_split==3)
+  #file_name = str_c(temp$name,'.png')
+  #png(file_name,res = 100,width = 400,height = 400)
+  #par(mfrow=c(2,1))
+  #par(mar = c(4, 4, 4, 1))
+  plot(y=lost/max(lost),x=2:100,xlab = '',ylab = '',pch=16,cex=0.5,lty=1,type='l',ylim=c(0,1))
+  points(y=(lost/max(lost))[c(2:10,seq(20,99,10))-1], x=c(2:10,seq(20,99,10)),pch=16,cex=0.7)
+  abline(v=best_k,col='red')
+  title(main=str_c(name,' ',method),line=1)
+  #title(ylab='归一化损失',line = 2.5,xlab = str_c('聚类数目','(间隔总数 = ',best_k,'，长间隔数 = ',length(markup_1)+1,')'))
+  title(ylab='归一化损失',line = 2.5,xlab = '聚类数目')
+  #text(best_k+5, lost[2], str_c('k=',best_k), pos=1)
+  #dev.off()
+}
+
+
+
+# get split
+# 标记分割点，并保存在result_raw_split/.csv
+get_split <- function(temp,best_k)
+{
+  name = temp$name
+  lost = temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  for (i in temp$res$result)
+  {
+    if (i$k == best_k)
+    {
+      best_res = i$result
+      break
+    }
+  }
+  s = strsplit(best_res,'\\|\\|')[[1]]
+  
+  markup=0
+  for (i in s)
+  {
+    markup = c(markup, as.integer(strsplit(i,' ')[[1]][1]))
+  }
+  markup = tail(markup,-2)
+  seqdatef <- merge_plot_data(temp,markup)
+  file_name = str_c(name,'.csv')
+  write.csv(seqdatef,file = str_c('C:/Elara/Documents/paper/cluster/cluster_res/result_raw_split/',file_name))
+}
+
+
+#aic
+aic_method <- function(temp){
+  name = temp$name
+  lost = temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  aic_value = 2*log(lost) + (2:100) 
+  best_k = which(aic_value==min(aic_value)) +1
+  draw_pic(temp,best_k,'aic_method')
+}
+
+
+#洛伦茨
+Lorenz_method_100 <- function(temp, speed_time = 3, sequence_type = TRUE){
+  name = temp$name
+  lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  avg_improve  = (head(lost,1) - tail(lost,1))/(length(lost)-1)
+  Lorenz = head(lost,-1) - tail(lost,-1)
+  if (sequence_type){
+    j=1
+    best_k=NULL
+    while(1)
+    {
+      if(Lorenz[j]<speed_time*avg_improve)
+      {
+        best_k = j+1
+        break
+      }
+      j = j+1
+    }
+  } else {
+    best_k = tail(which(Lorenz>speed_time*avg_improve),1)+1
+  }
+  if (length(best_k)==0)
+  {
+    print(str_c(name,'no one bigger than speed_time'))
+    best_k = tail(which(Lorenz>avg_improve),1)+1
+  }
+  draw_pic(temp,best_k,'平均速度法')
+  get_split(temp,best_k)
+}
+
+
+
+
+#min_improved一次下降量至少是全部下降量的10%
+min_improved <- function(temp,min_improve=0.1)
+{
+  name = temp$name
+  lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),]
+  min_improve = 0.1
+  k_lost = which((head(lost,length(lost)-1)/tail(lost,length(lost)-1)-1)>min_improve)
+  k_lost = k_lost[k_lost<=99]
+  if(length(k_lost)==0)
+  {
+    print(str_c(name,'all samller than min improvement'))
+    return()
+  }
+  best_k = tail(k_lost,1)+1
+  print(best_k)
+  draw_pic(temp,best_k,'min_improved')
+}
+
+# standard
+standard <- function(temp, min_slope, sequence_type=TRUE){
+  name = temp$name
+  lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  max_lost = max(lost)
+  min_lost = min(lost)
+  lost = (lost - min_lost)/(max_lost - min_lost)*99
+  diff = head(lost,-1)-tail(lost,-1)
+  if (sequence_type==TRUE)
+  {
+    for (i in 1:length(diff)){
+      if(diff[i]<=min_slope){
+        best_k=i
+        break
+      }
+    }
+  } else {
+    best_k = tail(which(diff>min_slope),1)+1
+  }
+  draw_pic(temp,best_k,'平均速度法')
+}
+
+beta_method <- function(temp){
+  name = temp$name
+  lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  lost=lost/max(lost)
+  beta = abs(tail(lost,-1)-head(lost,-1))
+  best_k = which(beta==max(beta))[1]+2
+  draw_pic(temp,best_k,'最大非负斜率法')
+  #get_split(temp,best_k)
+}
+
+
+beta_1_method <- function(temp){
+  name = temp$name
+  lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  lost=lost/max(lost)
+  beta = abs(tail(lost,-1)-head(lost,-1))
+  for (i in 1:length(beta))
+  {
+    if (beta[i]<0.1)
+    {
+      best_k = i+1
+      break
+    }
+  }
+  draw_pic(temp,best_k,'非负斜率近零法')
+  #get_split(temp,best_k)
+}
+
+beta_div_method <- function(temp){
+  name = temp$name
+  lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+  lost=lost/max(lost)
+  beta = tail(lost,-1)/head(lost,-1)
+  for (i in 1:length(beta))
+  {
+    if (beta[i]>0.9)
+    {
+      best_k = i+1
+      break
+    }
+  }
+  draw_pic(temp,best_k,'除商近一法')
+  #get_split(temp,best_k)
+}
+
+# draw_pic <- function(temp,best_k,method)
+# {
+#   name = str_split(str_split(temp$name,'_')[[1]][1],'v')[[1]][1]
+#   
+#   year = str_split(temp$name,'_')[[1]][2]
+#   if (year == 'all'){
+#     year = '2015-2017'
+#   }
+#   if (year == '2016')
+#   {
+#     year = '2016-2017'
+#   }
+#   name = str_c(name,' ',year )
+#   print(name)
+#   lost = temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+#   for (i in temp$res$result)
+#   {
+#     if (i$k == best_k)
+#     {
+#       best_res = i$result
+#       break
+#     }
+#   }
+#   s = strsplit(best_res,'\\|\\|')[[1]]
+#   
+#   markup=0
+#   for (i in s)
+#   {
+#     markup = c(markup, as.integer(strsplit(i,' ')[[1]][1]))
+#   }
+#   markup = tail(markup,-2)
+#   seqdatef <- merge_plot_data(temp,markup)
+#   markup_1 = which(seqdatef$is_split==1)
+#   markup_2 = which(seqdatef$is_split==2)
+#   markup_3 = which(seqdatef$is_split==3)
+#   file_name = str_c(temp$name,'.png')
+#   png(file_name,res = 100,width = 700,height = 700)
+#   par(mfrow=c(2,1))
+#   par(mar = c(3.5, 3.6, 2, 0.7))
+#   plot(y=lost/max(lost),x=2:100,xlab = '',ylab = '',pch=16,cex=0.5,lty=1,type='b')
+#   abline(v=best_k,col='red')
+#   title(main=str_c(name,' ',method),line=1)
+#   #title(ylab='归一化损失',line = 2.5,xlab = str_c('聚类数目','(间隔总数 = ',best_k,'，长间隔数 = ',length(markup_1)+1,')'))
+#   title(ylab='归一化损失',line = 2.5,xlab = '聚类数目')
+#   #text(best_k+5, lost[2], str_c('k=',best_k), pos=1)
+#   par(mar = c(3.6, 3.6, 1, 0.7))
+#   plot(seqdatef$volume/10000000,type = 'l',xaxt='n',ylab='',xlab='')
+#   x_seq = seq(1,length(seqdatef$date),as.integer(length(seqdatef$date)/6))
+#   axis(1,at=x_seq,as.integer(length(seqdatef$date)/6),label=seqdatef$date[x_seq]) 
+#   abline(v=markup_1,lty=1)
+#   abline(v=markup_2,lty=1)
+#   abline(v=markup_3,lty=1)
+#   #abline(v=markup_2,lty=2,col='grey')
+#   #abline(v=markup_3,lty=3,col='grey')
+#   title(ylab='成交量(千万)',xlab='日期',line = 2.5)
+#   dev.off()
+# }
+
+
+# Lorenz_method_all <- function(temp){
+#   name = temp$name
+#   lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),]
+#   avg_improve  = (head(lost,1) - tail(lost,1))/(length(lost)-1)
+#   lost= temp$res$leastlost_matrix[nrow(temp$res$leastlost_matrix),][1:99]
+#   Lorenz = head(lost,-1) - tail(lost,-1)
+#   best_k = tail(which(Lorenz>avg_improve),1)+1
+#   draw_pic(temp,best_k)
+# }
+# Lorenz_method_all(temp)
+
+```
+
+```{r load}
+tryCatch(
+  {require('stringr')},
+  warning = function(w){install.packages("stringr")}
+)
+path = getwd()
+
+load(str_c(path,'/cluster_res/result_raw.RData'))
+```
+
+```{r}
+
+setwd('C:/Elara/Documents/paper/cluster/cluster_res/result_raw_pic/')
+for (i in 1:length(result)){
+  temp = result[[i]]
+
+    file_name = str_c(temp$name,'.png')
+    png(file_name,res = 100,width = 800,height = 800)
+    par(mfrow=c(2,2))
+    par(mar = c(4, 4, 2, 1))
+    Lorenz_method_100(temp,2)
+    beta_div_method(temp)
+    beta_1_method(temp)
+    beta_method(temp)
+    dev.off()
+  
+  #beta_div_method(temp)
+
+}
+```
+
